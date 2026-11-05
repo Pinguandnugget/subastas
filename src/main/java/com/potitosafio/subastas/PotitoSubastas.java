@@ -124,7 +124,7 @@ public final class PotitoSubastas extends JavaPlugin implements CommandExecutor,
             Map<Integer, ItemStack> left = p.getInventory().addItem(item.clone());
             for (ItemStack overflow : left.values()) p.getWorld().dropItemNaturally(p.getLocation(), overflow);
         }
-        p.sendMessage(color("&a[PotitoSubastas] &fRecibiste objetos pendientes (si no habia espacio, quedaron en el suelo).");
+        p.sendMessage(color("&a[PotitoSubastas] &fRecibiste objetos pendientes (si no habia espacio, quedaron en el suelo)."));
         saveState();
     }
 
