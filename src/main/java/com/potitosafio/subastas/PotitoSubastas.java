@@ -1,6 +1,11 @@
 package com.potitosafio.subastas;
 
 import org.bukkit.Bukkit;
+import net.kyori.adventure.key.Key;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.TextComponent;
+import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.bukkit.ChatColor;
 import org.bukkit.Material;
 import org.bukkit.command.Command;
@@ -124,13 +129,57 @@ public final class PotitoSubastas extends JavaPlugin implements CommandExecutor,
             Map<Integer, ItemStack> left = p.getInventory().addItem(item.clone());
             for (ItemStack overflow : left.values()) p.getWorld().dropItemNaturally(p.getLocation(), overflow);
         }
-        p.sendMessage(color("&a[PotitoSubastas] &fRecibiste objetos pendientes (si no habia espacio, quedaron en el suelo)."));
+        p.sendMessage(render("&a[PotitoSubastas] &fRecibiste objetos pendientes (si no habia espacio, quedaron en el suelo)."));
         saveState();
     }
 
-    private String color(String value) { return ChatColor.translateAlternateColorCodes('&', value); }
-    private void tell(CommandSender s, String msg) { s.sendMessage(color("&6[PotitoSubastas] &r" + msg)); }
-    private void broadcast(String msg) { Bukkit.broadcastMessage(color("&6[PotitoSubastas] &r" + msg)); }
+    // Los glyphs se dibujan con la fuente potitosubastas:monedas del resource pack.
+    // No es suficiente imprimir el caracter: el componente debe indicar la fuente.
+    private Component render(String raw) {
+        TextComponent.Builder result = Component.text();
+        String[] parts = raw.split("(?=\\{(?:jade|azul|gris)\\})|(?<=\\{jade\\})|(?<=\\{azul\\})|(?<=\\{gris\\})");
+        for (String part : parts) {
+            String currency = switch (part) {
+                case "{jade}" -> "jade";
+                case "{azul}" -> "azul";
+                case "{gris}" -> "gris";
+                default -> null;
+            };
+            if (currency == null) result.append(LegacyComponentSerializer.legacyAmpersand().deserialize(part));
+            else {
+                String character = switch (currency) {
+                    case "jade" -> "\uE101";
+                    case "azul" -> "\uE102";
+                    default -> "\uE103";
+                };
+                result.append(Component.text(character).font(Key.key("potitosubastas", "monedas")));
+            }
+        }
+        return result.build();
+    }
+    private void tell(CommandSender s, String msg) { s.sendMessage(render("&6[PotitoSubastas] &r" + msg)); }
+    private void broadcast(String msg) { Component message = render("&6[PotitoSubastas] &r" + msg); Bukkit.getServer().broadcast(message); }
+
+    private Component translatedPrize(ItemStack stack) {
+        if (stack.hasItemMeta() && stack.getItemMeta().hasDisplayName())
+            return LegacyComponentSerializer.legacySection().deserialize(stack.getItemMeta().getDisplayName());
+        // La traduccion la realiza el cliente con el lang del propio mod.
+        // Ejemplo: item.ruleta.totem_nutria -> Tótem Nutria.
+        var id = stack.getType().getKey();
+        return Component.translatable("item." + id.getNamespace() + "." + id.getKey());
+    }
+    private void showPrize(CommandSender sender, String prefix, ItemStack item, String suffix) {
+        Component message = render(prefix + item.getAmount() + "x &b")
+            .append(translatedPrize(item))
+            .append(render(suffix));
+        sender.sendMessage(message);
+    }
+    private void announcePrize(String prefix, ItemStack item, String suffix) {
+        Component message = render(prefix + item.getAmount() + "x &b")
+            .append(translatedPrize(item))
+            .append(render(suffix));
+        Bukkit.getServer().broadcast(message);
+    }
     private boolean admin(CommandSender s) { if (s.hasPermission("potitosubastas.admin")) return true; tell(s, "&cNo tienes permiso."); return false; }
 
     @Override public boolean onCommand(CommandSender sender, Command command, String alias, String[] args) {
@@ -162,7 +211,7 @@ public final class PotitoSubastas extends JavaPlugin implements CommandExecutor,
             remaining = getConfig().getInt("segundos", 10);
             highest = 0; leader = null; leaderName = null; escrow.clear();
             saveState();
-            broadcast("&d✦ &e¡SUBASTA INICIADA! &fPremio: &b" + pretty(prize) + "&f. Puja con &e/subasta pujar <puntos>&f.");
+            announcePrize("&6[PotitoSubastas] &r&d✦ &e¡SUBASTA INICIADA! &fPremio: &b", prize, "&f. Puja con &e/subasta pujar <puntos>&f.");
             startTicker();
             return true;
         }
@@ -201,7 +250,7 @@ public final class PotitoSubastas extends JavaPlugin implements CommandExecutor,
         }
         if (sub.equals("actual")) {
             if (prize == null) tell(sender, "&eNo hay subasta activa.");
-            else tell(sender, "&ePremio: &b" + pretty(prize) + "&f | Mejor puja: &e" + highest + "&f puntos" + (leaderName != null ? " de &b" + leaderName : "") + "&f | Tiempo: &e" + remaining + "s");
+            else showPrize(sender, "&6[PotitoSubastas] &r&ePremio: &b", prize, "&f | Mejor puja: &e" + highest + "&f puntos" + (leaderName != null ? " de &b" + leaderName : "") + "&f | Tiempo: &e" + remaining + "s");
             return true;
         }
         if (sub.equals("cancelar")) {
@@ -338,7 +387,7 @@ public final class PotitoSubastas extends JavaPlugin implements CommandExecutor,
     }
     private String formatCounts(int[] amounts) {
         List<String> labels = new ArrayList<>();
-        for (int i = 0; i < 3; i++) if (amounts[i] > 0) labels.add("&f" + amounts[i] + " " + LABELS[i]);
+        for (int i = 0; i < 3; i++) if (amounts[i] > 0) labels.add("&f" + amounts[i] + " " + "{" + KEYS[i] + "}" + " " + LABELS[i]);
         return labels.isEmpty() ? "&7sin monedas" : String.join("&7, ", labels);
     }
     private String pretty(ItemStack item) {
