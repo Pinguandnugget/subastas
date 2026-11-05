@@ -1,0 +1,14 @@
+name: PotitoSubastas
+version: 1.0.0
+main: com.potitosafio.subastas.PotitoSubastas
+api-version: '1.21'
+author: PotitoStudio
+description: Subastas con monedas fisicas de mods y pujas de 10 segundos.
+commands:
+  subasta:
+    description: Sistema de subastas de PotitoSafio
+    usage: /subasta ayuda
+permissions:
+  potitosubastas.admin:
+    description: Permite registrar monedas y administrar subastas
+    default: op
