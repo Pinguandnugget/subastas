@@ -1,11 +1,6 @@
 package com.potitosafio.subastas;
 
 import org.bukkit.Bukkit;
-import net.kyori.adventure.key.Key;
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.TextComponent;
-import net.kyori.adventure.text.format.NamedTextColor;
-import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.bukkit.ChatColor;
 import org.bukkit.Material;
 import org.bukkit.command.Command;
@@ -129,56 +124,131 @@ public final class PotitoSubastas extends JavaPlugin implements CommandExecutor,
             Map<Integer, ItemStack> left = p.getInventory().addItem(item.clone());
             for (ItemStack overflow : left.values()) p.getWorld().dropItemNaturally(p.getLocation(), overflow);
         }
-        p.sendMessage(render("&a[PotitoSubastas] &fRecibiste objetos pendientes (si no habia espacio, quedaron en el suelo)."));
+        tell(p, "&aRecibiste objetos pendientes (si no habia espacio, quedaron en el suelo).");
         saveState();
     }
 
-    // Los glyphs se dibujan con la fuente potitosubastas:monedas del resource pack.
-    // No es suficiente imprimir el caracter: el componente debe indicar la fuente.
-    private Component render(String raw) {
-        TextComponent.Builder result = Component.text();
-        String[] parts = raw.split("(?=\\{(?:jade|azul|gris)\\})|(?<=\\{jade\\})|(?<=\\{azul\\})|(?<=\\{gris\\})");
-        for (String part : parts) {
-            String currency = switch (part) {
-                case "{jade}" -> "jade";
-                case "{azul}" -> "azul";
-                case "{gris}" -> "gris";
-                default -> null;
-            };
-            if (currency == null) result.append(LegacyComponentSerializer.legacyAmpersand().deserialize(part));
-            else {
-                String character = switch (currency) {
-                    case "jade" -> "\uE101";
-                    case "azul" -> "\uE102";
-                    default -> "\uE103";
-                };
-                result.append(Component.text(character).font(Key.key("potitosubastas", "monedas")));
-            }
-        }
-        return result.build();
+    // Arclight no expone necesariamente Adventure a los plugins.
+    // Usamos el comando vanilla /tellraw: puede mostrar fuentes custom y traducciones
+    // del cliente sin cargar clases net.kyori.adventure.
+    private String jsonEscape(String s) {
+        return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"")
+            .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t") + "\"";
     }
-    private void tell(CommandSender s, String msg) { s.sendMessage(render("&6[PotitoSubastas] &r" + msg)); }
-    private void broadcast(String msg) { Component message = render("&6[PotitoSubastas] &r" + msg); Bukkit.getServer().broadcast(message); }
 
-    private Component translatedPrize(ItemStack stack) {
-        if (stack.hasItemMeta() && stack.getItemMeta().hasDisplayName())
-            return LegacyComponentSerializer.legacySection().deserialize(stack.getItemMeta().getDisplayName());
-        // La traduccion la realiza el cliente con el lang del propio mod.
-        // Ejemplo: item.ruleta.totem_nutria -> Tótem Nutria.
+    private String rgbName(char code) {
+        return switch (Character.toLowerCase(code)) {
+            case '0' -> "black"; case '1' -> "dark_blue"; case '2' -> "dark_green";
+            case '3' -> "dark_aqua"; case '4' -> "dark_red"; case '5' -> "dark_purple";
+            case '6' -> "gold"; case '7' -> "gray"; case '8' -> "dark_gray";
+            case '9' -> "blue"; case 'a' -> "green"; case 'b' -> "aqua";
+            case 'c' -> "red"; case 'd' -> "light_purple"; case 'e' -> "yellow";
+            case 'f' -> "white"; default -> null;
+        };
+    }
+
+    private void appendText(StringBuilder parts, String text, String color, boolean bold, boolean italic) {
+        if (text.isEmpty()) return;
+        if (parts.length() > 0) parts.append(',');
+        parts.append("{\"text\":").append(jsonEscape(text))
+            .append(",\"color\":").append(jsonEscape(color))
+            .append(",\"bold\":").append(bold)
+            .append(",\"italic\":").append(italic).append('}');
+    }
+
+    private String segments(String message) {
+        StringBuilder parts = new StringBuilder();
+        StringBuilder pendingText = new StringBuilder();
+        String color = "white";
+        boolean bold = false, italic = false;
+        for (int i = 0; i < message.length();) {
+            if (message.charAt(i) == '&' && i + 1 < message.length()) {
+                char code = Character.toLowerCase(message.charAt(i + 1));
+                String nextColor = rgbName(code);
+                if (nextColor != null || "klmnor".indexOf(code) >= 0) {
+                    appendText(parts, pendingText.toString(), color, bold, italic);
+                    pendingText.setLength(0);
+                    if (nextColor != null) { color = nextColor; bold = false; italic = false; }
+                    else if (code == 'l') bold = true;
+                    else if (code == 'o') italic = true;
+                    else if (code == 'r') { color = "white"; bold = false; italic = false; }
+                    i += 2;
+                    continue;
+                }
+            }
+            String glyph = null;
+            String symbol = null;
+            if (message.startsWith("{jade}", i)) { glyph = "\uE101"; symbol = "{jade}"; }
+            else if (message.startsWith("{azul}", i)) { glyph = "\uE102"; symbol = "{azul}"; }
+            else if (message.startsWith("{gris}", i)) { glyph = "\uE103"; symbol = "{gris}"; }
+            if (glyph != null) {
+                appendText(parts, pendingText.toString(), color, bold, italic);
+                pendingText.setLength(0);
+                if (parts.length() > 0) parts.append(',');
+                parts.append("{\"text\":").append(jsonEscape(glyph))
+                     .append(",\"font\":\"potitosubastas:monedas\",\"color\":\"white\"}");
+                i += symbol.length();
+                continue;
+            }
+            pendingText.append(message.charAt(i++));
+        }
+        appendText(parts, pendingText.toString(), color, bold, italic);
+        return parts.toString();
+    }
+
+    private String messageJson(String raw) {
+        return "{\"text\":\"\",\"extra\":[" + segments(raw) + "]}";
+    }
+
+    private void sendJson(CommandSender sender, String json, String fallback) {
+        if (sender instanceof Player p) {
+            // Ejecutar desde consola evita permisos de /tellraw para jugadores.
+            try {
+                Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "minecraft:tellraw " + p.getName() + " " + json);
+            } catch (Exception ex) {
+                p.sendMessage(ChatColor.translateAlternateColorCodes('&', fallback));
+                getLogger().warning("Fallo tellraw: " + ex.getMessage());
+            }
+        } else sender.sendMessage(ChatColor.translateAlternateColorCodes('&', fallback));
+    }
+
+    private void tell(CommandSender s, String msg) {
+        String raw = "&6[PotitoSubastas] &r" + msg;
+        sendJson(s, messageJson(raw), raw.replace("{jade}", "[Jade]")
+            .replace("{azul}", "[Azul]").replace("{gris}", "[Gris]"));
+    }
+
+    private void broadcast(String msg) {
+        String raw = "&6[PotitoSubastas] &r" + msg;
+        String json = messageJson(raw);
+        String fallback = raw.replace("{jade}", "[Jade]")
+            .replace("{azul}", "[Azul]").replace("{gris}", "[Gris]");
+        for (Player player : Bukkit.getOnlinePlayers()) sendJson(player, json, fallback);
+        Bukkit.getConsoleSender().sendMessage(ChatColor.translateAlternateColorCodes('&', fallback));
+    }
+
+    private String translatedPrizeJson(ItemStack stack) {
+        if (stack.hasItemMeta() && stack.getItemMeta().hasDisplayName()) {
+            String display = stack.getItemMeta().getDisplayName();
+            return messageJson(display.replace('§', '&'));
+        }
         var id = stack.getType().getKey();
-        return Component.translatable("item." + id.getNamespace() + "." + id.getKey());
+        return "{\"translate\":" + jsonEscape("item." + id.getNamespace() + "." + id.getKey()) + "}";
     }
+
     private void showPrize(CommandSender sender, String prefix, ItemStack item, String suffix) {
-        Component message = render(prefix + item.getAmount() + "x &b")
-            .append(translatedPrize(item))
-            .append(render(suffix));
-        sender.sendMessage(message);
+        String json = "{\"text\":\"\",\"extra\":["
+            + segments(prefix + item.getAmount() + "x &b") + ","
+            + translatedPrizeJson(item) + "," + messageJson(suffix) + "]}";
+        sendJson(sender, json, prefix + item.getAmount() + "x " + pretty(item) + suffix);
     }
+
     private void announcePrize(String prefix, ItemStack item, String suffix) {
-        Component message = render(prefix + item.getAmount() + "x &b")
-            .append(translatedPrize(item))
-            .append(render(suffix));
-        Bukkit.getServer().broadcast(message);
+        String json = "{\"text\":\"\",\"extra\":["
+            + segments(prefix + item.getAmount() + "x &b") + ","
+            + translatedPrizeJson(item) + "," + messageJson(suffix) + "]}";
+        for (Player p : Bukkit.getOnlinePlayers()) sendJson(p, json, prefix + pretty(item) + suffix);
+        Bukkit.getConsoleSender().sendMessage(ChatColor.translateAlternateColorCodes('&', prefix + pretty(item) + suffix));
     }
     private boolean admin(CommandSender s) { if (s.hasPermission("potitosubastas.admin")) return true; tell(s, "&cNo tienes permiso."); return false; }
 
